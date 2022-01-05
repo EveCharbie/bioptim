@@ -32,6 +32,167 @@ from bioptim import (
     BiorbdInterface,
 )
 
+# ------------------------------------------- Optimal feedback ---------------------------------------------------------
+
+def custom_dynamic(states, controls, parameters, nlp, motor_command):
+
+    DynamicsFunctions.apply_parameters(parameters, nlp)
+    q = DynamicsFunctions.get(nlp.states["q"], states)
+    qdot = DynamicsFunctions.get(nlp.states["qdot"], states)
+    tau = DynamicsFunctions.get(nlp.controls["tau"], controls)
+
+    # You can directly call biorbd function (as for ddq) or call bioptim accessor (as for dq)
+    dq = DynamicsFunctions.compute_qdot(nlp, q, qdot) * my_additional_factor
+    ddq = nlp.model.ForwardDynamics(q, qdot, tau+motor_command).to_mx()
+
+    return dq, ddq
+
+
+def custom_configure(ocp: OptimalControlProgram, nlp: NonLinearProgram, my_additional_factor=1):
+    """
+    Tell the program which variables are states and controls.
+    The user is expected to use the ConfigureProblem.configure_xxx functions.
+
+    Parameters
+    ----------
+    ocp: OptimalControlProgram
+        A reference to the ocp
+    nlp: NonLinearProgram
+        A reference to the phase
+    my_additional_factor: int
+        An example of an extra parameter sent by the user
+    """
+
+    ConfigureProblem.configure_q(nlp, as_states=True, as_controls=False)
+    ConfigureProblem.configure_qdot(nlp, as_states=True, as_controls=False)
+    ConfigureProblem.configure_tau(nlp, as_states=False, as_controls=True)
+    ConfigureProblem.configure_dynamics_function(ocp, nlp, custom_dynamic, my_additional_factor=my_additional_factor)
+
+
+def prepare_ofcp(
+    biorbd_model_path: str = "models/double_pendulum.bioMod",
+    biorbd_model_path_withTranslations: str = "models/double_pendulum_with_translations.bioMod",
+) -> OptimalControlProgram:
+
+    biorbd_model = (biorbd.Model(biorbd_model_path), biorbd.Model(biorbd_model_path_withTranslations), biorbd.Model(biorbd_model_path_withTranslations))
+
+    # Problem parameters
+    n_shooting = (40, 40, 40)
+    final_time = (1, 1, 1)
+    tau_min, tau_max, tau_init = -200, 200, 0
+
+    # Mapping
+    tau_mappings = BiMappingList()
+    tau_mappings.add("tau", [None, 0], [1], phase=0)
+    tau_mappings.add("tau", [None, None, None, 0], [3], phase=1)
+    tau_mappings.add("tau", [None, None, None, 0], [3], phase=2)
+
+    # Phase transition
+    phase_transitions = PhaseTransitionList()
+    phase_transitions.add(
+        PhaseTransitionFcn.CONTINUOUS, phase_pre_idx=0, states_mapping=BiMapping([0, 1, 2, 3], [2, 3, 6, 7])
+    )
+
+    # Random-Robust specifications
+    size_random = [{
+        "states": np.ones(biorbd_model[i].nbQ() + biorbd_model[i].nbQdot()) * 0, # * 5 * np.pi/180
+        "controls": np.ones(len(tau_mappings[i]["tau"].to_first.map_idx)) * 1,
+    } for i in range(len(biorbd_model))]
+
+    # Add objective functions
+    objective_functions = ObjectiveList()
+    objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", weight=1, phase=0)
+    objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", weight=1, phase=1)
+    # objective_functions.add(
+    #     ObjectiveFcn.Mayer.MINIMIZE_COM_POSITION, node=Node.END, weight=-1000, axes=Axis.Z, phase=1, quadratic=False
+    # ) #robustifier
+    objective_functions.add(
+        custom_robust_objective_MINIMIZE_COM_POSITION,
+        custom_type=ObjectiveFcn.Mayer,
+        node=Node.END,
+        quadratic=False,
+        weight=-1000,
+        phase=1,
+        axes=Axis.Z,
+        nb_random=100,
+        size_random=size_random,
+    )
+
+    objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_COM_POSITION, node=Node.END, weight=-100, axes=Axis.Y, phase=1) #robustifier
+
+    # Constraints
+    constraints = ConstraintList()
+    constraints.add(ConstraintFcn.TIME_CONSTRAINT, node=Node.END, min_bound=0.1, max_bound=2, phase=0)
+    constraints.add(ConstraintFcn.TIME_CONSTRAINT, node=Node.END, min_bound=0.1, max_bound=2, phase=1)
+    constraints.add(ConstraintFcn.TIME_CONSTRAINT, node=Node.END, min_bound=0.1, max_bound=2, phase=2)
+    constraints.add(ConstraintFcn.TRACK_COM_POSITION, node=Node.END, axes=Axis.Z, phase=1, quadratic=False, min_bound=0, max_bound=2)
+    constraints.add(ConstraintFcn.SUPERIMPOSE_MARKERS, node=Node.END, first_marker="bar", second_marker="marker_1", phase=2) #robustifier
+
+    # Dynamics
+    dynamics = DynamicsList()
+    dynamics.add(DynamicsFcn.TORQUE_DRIVEN, with_contact=False)
+    dynamics.add(DynamicsFcn.TORQUE_DRIVEN, with_contact=False)
+    dynamics.add(DynamicsFcn.TORQUE_DRIVEN, with_contact=False)
+
+    # Path constraint
+    x_bounds = BoundsList()
+    x_bounds.add(bounds=QAndQDotBounds(biorbd_model[0]))
+    x_bounds.add(bounds=QAndQDotBounds(biorbd_model[1]))
+    x_bounds.add(bounds=QAndQDotBounds(biorbd_model[2]))
+
+    # Phase 0
+    x_bounds[0].min[0, :] = np.pi
+    x_bounds[0][1, 0] = 0
+    x_bounds[0][0, 0] = np.pi
+    x_bounds[0].min[0, -1] = 2 * np.pi
+
+    # Phase 1
+    x_bounds[1].min[2, :] = np.pi
+    x_bounds[1][[0, 1, 4, 5], 0] = 0
+    # x_bounds[1].min[2, -1] = np.pi
+    # x_bounds[1].max[2, -1] = 2 * np.pi
+
+    # Phase 2
+    x_bounds[2].min[2, -1] = 5/4 * np.pi
+    x_bounds[2].max[2, -1] = 2 * np.pi
+    # x_bounds[2].min[3, -1] = 0
+    # je pourrais ajouter des contraintes pour les mains sur la barre ici a la place au besoin
+
+    # Initial guess
+    x_init = InitialGuessList()
+    x_init.add([0] * (biorbd_model[0].nbQ() + biorbd_model[0].nbQdot()))
+    x_init.add([0] * (biorbd_model[1].nbQ() + biorbd_model[1].nbQdot()))
+    x_init.add([0] * (biorbd_model[2].nbQ() + biorbd_model[2].nbQdot()))
+
+    # Define control path constraint
+    u_bounds = BoundsList()
+    u_bounds.add([tau_min] * len(tau_mappings[0]["tau"].to_first), [tau_max] * len(tau_mappings[0]["tau"].to_first))
+    u_bounds.add([tau_min] * len(tau_mappings[1]["tau"].to_first), [tau_max] * len(tau_mappings[1]["tau"].to_first))
+    u_bounds.add([tau_min] * len(tau_mappings[2]["tau"].to_first), [tau_max] * len(tau_mappings[2]["tau"].to_first))
+
+    # Control initial guess
+    u_init = InitialGuessList()
+    u_init.add([tau_init] * len(tau_mappings[0]["tau"].to_first))
+    u_init.add([tau_init] * len(tau_mappings[1]["tau"].to_first))
+    u_init.add([tau_init] * len(tau_mappings[2]["tau"].to_first))
+
+    return OptimalControlProgram(
+        biorbd_model,
+        dynamics,
+        n_shooting,
+        final_time,
+        x_init=x_init,
+        u_init=u_init,
+        x_bounds=x_bounds,
+        u_bounds=u_bounds,
+        objective_functions=objective_functions,
+        constraints=constraints,
+        variable_mappings=tau_mappings,
+        phase_transitions=phase_transitions,
+    )
+
+
+# ------------------------------------------------ Robust --------------------------------------------------------------
 
 def custom_robust_objective_MINIMIZE_COM_POSITION(all_pn, axes, nb_random, size_random):
     """
@@ -220,6 +381,7 @@ def prepare_rocp(
         phase_transitions=phase_transitions,
     )
 
+# --------------------------------------------- base problem -----------------------------------------------------------
 
 def prepare_ocp(
     biorbd_model_path: str = "models/double_pendulum.bioMod",
@@ -329,14 +491,20 @@ def main():
     # --- Prepare the ocp --- #
     ocp = prepare_ocp()
     ocp.add_plot_penalty(CostType.ALL)
-    sol = ocp.solve(Solver.IPOPT()) # show_online_optim=True
-    sol.animate()
+    sol_ocp = ocp.solve(Solver.IPOPT()) # show_online_optim=True
+    sol_ocp.animate()
 
-    # --- Prepare the rocp --- #
-    rocp = prepare_rocp()
-    rocp.add_plot_penalty(CostType.ALL)
-    sol = rocp.solve(Solver.IPOPT()) # show_online_optim=True
-    sol.animate()
+    # # --- Prepare the rocp --- #
+    # rocp = prepare_rocp()
+    # rocp.add_plot_penalty(CostType.ALL)
+    # sol_rocp = rocp.solve(Solver.IPOPT()) # show_online_optim=True
+    # sol_rocp.animate()
+
+    # --- Prepare the ofcp --- #
+    ofcp = prepare_ofcp(sol_ocp)
+    ofcp.add_plot_penalty(CostType.ALL)
+    sol_ofcp = ofcp.solve(Solver.IPOPT()) # show_online_optim=True
+    sol_ofcp.animate()
 
 if __name__ == "__main__":
     main()
