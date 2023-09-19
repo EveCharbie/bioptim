@@ -198,7 +198,7 @@ def prepare_ocp(
     objective_functions = ObjectiveList()
     objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_TIME, weight=1)
     objective_functions.add(
-        ObjectiveFcn.Lagrange.MINIMIZE_CONTROL,
+        ObjectiveFcn.Mayer.MINIMIZE_CONTROL,
         key="u",
         weight=1e-2 / (2 * n_shooting),
         node=Node.ALL_SHOOTING,
@@ -242,7 +242,7 @@ def prepare_ocp(
     )
 
     u_bounds = BoundsList()
-    u_bounds.add("u", min_bound=[-cas.inf] * nb_u, max_bound=[cas.inf] * nb_u, interpolation=InterpolationType.CONSTANT)
+    u_bounds.add("u", min_bound=[-10] * nb_u, max_bound=[10] * nb_u, interpolation=InterpolationType.CONSTANT)
 
     # Initial guesses
     x_init = InitialGuessList()
@@ -320,7 +320,7 @@ def prepare_socp(
     objective_functions = ObjectiveList()
     objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_TIME, weight=1)
     objective_functions.add(
-        ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="u", weight=1e-2 / (2 * n_shooting), node=Node.ALL_SHOOTING, quadratic=True
+        ObjectiveFcn.Mayer.MINIMIZE_CONTROL, key="u", weight=1e-2 / (2 * n_shooting), node=Node.ALL_SHOOTING, quadratic=True
     )
 
     # Constraints
@@ -362,7 +362,7 @@ def prepare_socp(
     )
 
     u_bounds = BoundsList()
-    u_bounds.add("u", min_bound=[-cas.inf] * nb_u, max_bound=[cas.inf] * nb_u, interpolation=InterpolationType.CONSTANT)
+    u_bounds.add("u", min_bound=[-10] * nb_u, max_bound=[10] * nb_u, interpolation=InterpolationType.CONSTANT)
 
     # Initial guesses
     x_init = InitialGuessList()

@@ -515,6 +515,7 @@ def get_cov_init_dms(
     """
     RK4 integration of d/dt(P_k) = A @ P_k + P_k @ A.T + B @ sigma_w @ B.T
     """
+    integration_method = "IRK"  # "RK4", "IRK", "slicot"
 
     n_q = model.nb_q
     n_joints = model.nb_u
@@ -567,17 +568,24 @@ def get_cov_init_dms(
     cov_last = np.zeros((2 * n_joints * 2 * n_joints, n_shooting + 1))
     cov_last[:, 0] = cov_init[:, 0]
     for i in range(n_shooting):
-        cov_next_computed = integrator_rk4(
-            model,
-            q_last[:, i],
-            qdot_last[:, i],
-            u_last[:, i],
-            cov_last[:, i],
-            cov_derivative_func,
-            states_derivative_func,
-            n_shooting,
-            duration,
-        )
+        if integration_method == "RK4":
+            cov_next_computed = integrator_rk4(
+                model,
+                q_last[:, i],
+                qdot_last[:, i],
+                u_last[:, i],
+                cov_last[:, i],
+                cov_derivative_func,
+                states_derivative_func,
+                n_shooting,
+                duration,
+            )
+        elif integration_method == "IRK":
+            
+        elif integration_method == "slicot":
+            cov_next_computed = cas.dplesol(A, sigma_w, "slicot")
+        else:
+            print("Integration method not implemented yet")
         cov_last[:, i + 1] = cov_next_computed
     return cov_last
 
