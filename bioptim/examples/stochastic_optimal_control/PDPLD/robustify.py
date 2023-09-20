@@ -3,8 +3,8 @@ import os
 
 hyper = [{"a": 1, "b": 1, "x0": 0, "y0": 0, "n": 2}]
 
-#
-initial = Collocation(nlp_solver="worhp", with_cov=False, plot_hold=False, hyper=hyper, plot_clear=True)
+nlp_solver="worhp",
+initial = Collocation(ubound=10, with_cov=False, plot_hold=False, hyper=hyper, plot_clear=True, log_results="nominal")
 
 cov_propagation = Collocation(
     nlp_solver="worhp", with_cov=True, plot_hold=False, init=initial, hyper=hyper, plot_clear=True

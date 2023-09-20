@@ -6,12 +6,12 @@ class Collocation(Formulation):
         self,
         with_cov=False,
         N=40,
-        nlp_solver="ipopt",
-        qp_solver="IPOPT",
+        # nlp_solver="ipopt",
+        # qp_solver="IPOPT",
         with_plotting=True,
         plot_hold=True,
         init=None,
-        hot_start=False,
+        # hot_start=False,
         with_gamma=False,
         gamma=0,
         hyper=[{"a": 1, "b": 1, "x0": 0, "y0": 0, "n": 2}],
@@ -41,30 +41,28 @@ class Collocation(Formulation):
             if not (h["n"] % 2 == 0):
                 raise Exception("superellipse: n must be even")
 
-        states, controls = model.states, model.controls
-
-        n = states.shape[0]
-        m = controls.shape[0]
-        p = model.dist.shape[0]
+        n = len(model.states.keys())-1
+        m = len(model.controls.keys())-1
+        # p = len(model.dist.keys())-1
         q = len(hyper)
 
-        x, u, w = states[...], controls[...], model.dist[...]
+        x, u, w = model.states["states"], model.controls["controls"], model.dist["dist"]
 
-        param = Collection()
-        param.m = model.parameters
-        if with_cov:
-            Sigma_ww = param.Sigma_ww = SX.sym("Sigma_ww", p, p)
-        T = param.T = SX.sym("T")
-        if with_gamma:
-            gamma = param.gamma = SX.sym("gamma")
-
-        param.freeze()
-        pp = param[...]
+        # param_m = model.parameters["parameters"]
+        # pp = cas.vertcat(param_m)
+        # if with_cov:
+        #     Sigma_ww = cas.SX.sym("Sigma_ww", p, p)
+        #     pp = cas.vertcat(pp, Sigma_ww)
+        T = cas.SX.sym("T")
+        # pp = cas.vertcat(pp, T)
+        # if with_gamma:
+        #     gamma = cas.SX.sym("gamma")
+        #     pp = cas.vertcat(pp, gamma)
 
         # ============= Collocation on one control interval =============
 
         # Non-dimensional time-base running from 0 to 1 on collocation interval
-        rho = SX.sym("rho")
+        rho = cas.SX.sym("rho")
 
         # Choose collocation points
         rho_root = [0, 0.046910, 0.230765, 0.500000, 0.769235, 0.953090]
@@ -73,140 +71,171 @@ class Collocation(Formulation):
         d = len(rho_root) - 1
 
         # The helper state sample used by collocation
-        z = SX.sym("z", n, d + 1)
+        z = cas.SX.sym("z", n, d + 1)
 
         # Collocation polynomial
-        Le = vertcat(
-            [
-                numpy.prod([(rho - rho_root[r]) / (rho_root[j] - rho_root[r]) for r in range(d + 1) if not (r == j)])
-                for j in range(d + 1)
-            ]
-        )
-        Pi = SXFunction([rho, z], [mul(z, Le)])
-        Pi.init()
+        Le = cas.DM()
+        for j in range(d + 1):
+            coeff = 1
+            for r in range(d + 1):
+                if r != j:
+                    coeff *= (rho - rho_root[r]) / (rho_root[j] - rho_root[r])
+            Le = cas.vertcat(Le, coeff)
 
-        dPi = Pi.jacobian(0, 0)
-        dPi.init()
+        Pi = cas.Function("Pi", [rho, z], [z @ Le])
+        dPi = cas.Function("jac_Pi_rho", [rho, z], [cas.jacobian(Pi(rho, z), rho)])
 
         # System dynamics
-        f = SXFunction([x, u, w, pp], [model.rhs[...]])
-        f.init()
+
+        f = cas.Function("dStates_dt", [x, u, w], [model.rhs["derivative_fun"](x, u, w)])
 
         # The function G in 0 = G(x_k,z_k,u_k,w_k)
         G_argout = []
-        G_argout += [Pi.eval([0, z])[0] - x]
-        G_argout += [
-            dPi.eval([rho_i, z])[0] - T / N * f.eval([Pi.eval([rho_i, z])[0], u, w, pp])[0] for rho_i in rho_root[1:]
-        ]
-
-        G = SXFunction([x, z, u, w, pp], [vertcat(G_argout)])
-        G.init()
+        G_argout += [Pi(0, z) - x]
+        for rho_i in rho_root[1:]:
+            G_argout += [dPi(rho_i, z) - T / N * f(Pi(rho_i, z), u, w)]
+        G = cas.Function("G", [x, z, u, w, T], [cas.vertcat(*G_argout)])
 
         # The function F in x_{k+1} = F(z_k)
-        F = SXFunction([z], Pi.eval([1, z]))
-        F.init()
+        F = cas.Function("F", [z], [Pi(1, z)])
 
         # ======== Covariance-related function on one control interval ========
         if with_cov:
-            P = SX.sym("P", n, n)
-            M = SX.sym("M", n, n * (d + 1))
+            P = cas.SX.sym("P", n, n)
+            M = cas.SX.sym("M", n, n * (d + 1))
 
-            Gdx, Gdz, Gdw = G.jac(0, 0), G.jac(1, 0), G.jac(2, 0)
-            Fdz = F.jac(0, 0)
+            Gdx = cas.Function("jac_G_dx", [x, z, u, w, T], [cas.jacobian(G(x, z, u, w, T), x)])
+            Gdz = cas.Function("jac_G_dz", [x, z, u, w, T], [cas.jacobian(G(x, z, u, w, T), z)])
+            Gdw = cas.Function("jac_G_dw", [x, z, u, w, T], [cas.jacobian(G(x, z, u, w, T), w)])
+            Fdz = cas.Function("jac_F_dz", [z], [cas.jacobian(F(z), z)])
 
             # Covariance propagation rule
-            Pf = SXFunction([x, z, u, w, pp, P, M], [mul([M, mul([Gdx, P, Gdx.T]) + mul([Gdw, Sigma_ww, Gdw.T]), M.T])])
-            Pf.init()
+            Pf = cas.Function("P_next", [x, z, u, w, T, P, M], [M @ (Gdx @ P @ Gdx.T + Gdw @ Sigma_ww @ Gdw.T) @ M.T])
 
             # Equality defining M
-            Mf = SXFunction([x, z, u, w, pp, P, M], [Fdz.T - mul(Gdz.T, M.T)])
-            Mf.init()
+            Mf = cas.Function("M_plus", [x, z, u, w, T, P, M], [Fdz.T - Gdz.T @ M.T])
 
         # ==== Superellipsoid constraints on one control interval =====
 
-        # The superellipsoid constraints
+        superellipsoid_constraint = cas.SX()
+        for h in hyper:
+            superellipsoid_constraint = cas.vertcat(superellipsoid_constraint, ((x[0] - h["x0"]) / h["a"]) ** h["n"] + ((x[1] - h["y0"]) / h["b"]) ** h["n"] - 1)
+        h = cas.Function("superellipsoid_constraint", [x], [superellipsoid_constraint])
 
-        # h = SXFunction([x],[vertcat([sqrt((x[states.i_x]-h["x0"])**2+(x[states.i_y]-h["y0"])**2)*(1 - (((x[states.i_x]-h["x0"])/h["a"])**h["n"] +  ((x[states.i_y]-h["y0"])/h["b"])**h["n"])**(-1.0/h["n"])) for h in hyper ])])
-        # h.init()
-
-        # h = SXFunction([x],[vertcat([(((x[states.i_x]-h["x0"])/h["a"])**h["n"] +  ((x[states.i_y]-h["y0"])/h["b"])**h["n"])**(1/h["n"]) - 1 for h in hyper ])])
-
-        h = SXFunction(
-            [x],
-            [
-                vertcat(
-                    [
-                        ((x[states.i_x] - h["x0"]) / h["a"]) ** h["n"]
-                        + ((x[states.i_y] - h["y0"]) / h["b"]) ** h["n"]
-                        - 1
-                        for h in hyper
-                    ]
-                )
-            ],
-        )
-        h.init()
-
-        hdx = h.jac(0, 0)
-        hx = h.eval([x])[0]
+        hdx = cas.jacobian(h(x), x)
+        hx = h(x)
 
         if with_gamma:
             # The robustified superellipsoid constraints
-            hr = SXFunction(
-                [x, pp, P], [vertcat([hx[i, 0] - gamma * sqrt(mul([hdx[i, :], P, hdx[i, :].T])) for i in range(q)])]
-            )
-            hr.init()
+            superellipsoid_constraint = cas.SX()
+            for i in range(q):
+                superellipsoid_constraint = cas.vertcat(superellipsoid_constraint, hx[i, 0] - gamma * cas.sqrt(hdx[i, :] @ P @ hdx[i, :].T))
+            hr = cas.Function("robustified_superellipsoid_constraint", [x, P], [superellipsoid_constraint])
 
         # ============= OCP Formulation =============
 
-        V = Collection()  # Collection of decision variables
-        V.Z = [MX.sym("Z[%d]" % i, n, d + 1) for i in range(N)]
-        V.X = [MX.sym("X[%d]" % i, n) for i in range(N + 1)]
-        V.U = [MX.sym("U[%d]" % i, m, 1) for i in range(N)]
+        # Decision variables
+        variables = cas.MX()
+        model.i_x = list(range(variables.shape[0], variables.shape[0] + n * (N + 1)))
+        V_X = [cas.MX.sym(f"X[{i}]", n) for i in range(N + 1)]
+        variables = cas.vertcat(variables, *V_X)
+        current_n_z = 0
+        V_Z = []
+        model.i_z = [[] for i in range(N)]
+        reshaped_z = cas.MX()
+        for i in range(N):
+            model.i_z[i] = list(range(variables.shape[0] + current_n_z, variables.shape[0] + current_n_z + n * (d + 1)))
+            current_n_z += n * (d + 1)
+            V_Z += [[cas.MX.sym(f"Z[{i},{j}]", n, 1) for j in range(d + 1)]]
+            reshaped_z = cas.vertcat(reshaped_z, cas.vertcat(V_Z[i][0], V_Z[i][1], V_Z[i][2], V_Z[i][3], V_Z[i][4], V_Z[i][5]))
+        variables = cas.vertcat(variables, reshaped_z)
+        V_P = []
+        model.i_p = [[] for i in range(N)]
+        reshaped_p = cas.MX()
+        V_M = []
+        model.i_m = [[] for i in range(N)]
+        reshaped_m = cas.MX()
         if with_cov:
-            V.P = [MX.sym("P[%d]" % i, n, n) for i in range(N + 1)]
-            V.M = [MX.sym("M[%d]" % i, n, n * (d + 1)) for i in range(N)]
+            current_n_p = 0
+            for i in range(N + 1):
+                model.i_p[i] = list(range(variables.shape[0] + current_n_p, variables.shape[0] + current_n_p + n * n))
+                V_P += [[cas.MX.sym(f"P[{i},{j}]", n, 1) for j in range(n)]]
+                reshaped_p = cas.vertcat(reshaped_p, cas.vertcat(V_P[i][0], V_P[i][1], V_P[i][2], V_P[i][3]))
+            variables = cas.vertcat(variables, reshaped_p)
+            current_n_m = 0
+            for i in range(N + 1):
+                model.i_m[i] = list(range(variables.shape[0] + current_n_m, variables.shape[0] + current_n_m + n * (d + 1)))
+                V_M += [[cas.MX.sym(f"M[{i},{j}]", n, 1) for j in range(d+1)]]
+                reshaped_m = cas.vertcat(reshaped_m, cas.vertcat(V_M[i][0], V_M[i][1], V_M[i][2], V_M[i][3]))
+            variables = cas.vertcat(variables, reshaped_m)
+        model.i_u = list(range(variables.shape[0], variables.shape[0] + m * N))
+        V_U = [cas.MX.sym(f"U[{i}]", m, 1) for i in range(N)]
+        variables = cas.vertcat(variables, *V_U)
+        model.i_t = variables.shape[0]
+        T = cas.MX.sym("T", T.shape)
+        variables = cas.vertcat(variables, T)
+        V = {"X": V_X, "Z": V_Z, "P": V_P, "M": V_M, "U": V_U, "T": T, "V": variables}
 
-        PP = Collection()
-        PP.m = MX.sym("p", param.m.shape)
-        if with_cov:
-            PP.Sigma_ww = MX.sym("Sigma_ww", param.Sigma_ww.shape)
-        PP.T = MX.sym("T", param.T.shape)
-        if with_gamma:
-            PP.gamma = MX.sym("gamma", param.gamma.shape)
-        PP.freeze()
-        V.PP = PP
-
-        if with_cov:
-            V.setOrder(["PP", ("X", "Z", "P", "M", "U")])
-        else:
-            V.setOrder(["PP", ("X", "Z", "U")])
-
-        V.freeze()
+        # PP_params = cas.MX()
+        # PP_m = cas.MX.sym("p", param_m.shape[0])
+        # PP_params = cas.vertcat(PP_params, PP_m)
+        # PP_Sigma_ww = None
+        # if with_cov:
+        #     PP_Sigma_ww = cas.MX.sym("Sigma_ww", Sigma_ww.shape)
+        #     PP_params = cas.vertcat(PP_params, PP_Sigma_ww)
+        # PP_T = cas.MX.sym("T", T.shape)
+        # PP_params = cas.vertcat(PP_params, PP_T)
+        # PP_gamma = None
+        # if with_gamma:
+        #     PP_gamma = cas.MX.sym("gamma", gamma.shape)
+        #     PP_params = cas.vertcat(PP_params, PP_gamma)
+        # PP = {"PP_m": PP_m, "PP_Sigma_ww": PP_Sigma_ww, "PP_T": PP_T, "PP_gamma": PP_gamma, "PP": PP_params}
+        # V["PP"] = PP["PP"]
+        # V["T"] = PP_T
 
         # Zero nominal disturbance
-        w0 = DMatrix.zeros(w.shape)
+        w0 = cas.DM.zeros(w.shape)
 
-        g = Collection()  # Collection of constraints
-        g.F = [F.call([V.Z[k]])[0] - V.X[k + 1] for k in range(N)]
-        g.G = [G.call([V.X[k], V.Z[k], V.U[k], w0, V.PP[...]])[0] for k in range(N)]
+        # Constraints
+        gf = cas.MX()
+        model.i_g_f = list(range(gf.shape[0], gf.shape[0] + n * N))
+        g_f = [F(cas.horzcat(*V["Z"][k])) - V["X"][k + 1] for k in range(N)]
+        gf = cas.vertcat(gf, *g_f)
+        model.i_g_g = list(range(gf.shape[0], gf.shape[0] + n * (d + 1) * N))
+        g_g = [G(V["X"][k], cas.horzcat(*V["Z"][k]), V["U"][k], w0, T) for k in range(N)]
+        gf = cas.vertcat(gf, *g_g)
+        model.i_g_p = None
+        model.i_g_m = None
         if with_cov:
-            g.P = [Pf.call([V.X[k], V.Z[k], V.U[k], w0, V.PP[...], V.P[k], V.M[k]])[0] - V.P[k] for k in range(N)]
-            g.M = [Mf.call([V.X[k], V.Z[k], V.U[k], w0, V.PP[...], V.P[k], V.M[k]])[0] for k in range(N)]
-        g.periodic = V.X[0] - V.X[-1]
+            model.i_g_p = list(range(gf.shape[0], gf.shape[0] + n * n * (N + 1)))
+            g_P = [Pf(V["X"][k], cas.horzcat(*V["Z"][k]), V["U"][k], w0, T, cas.horzcat(*V["P"][k]), cas.horzcat(*V["M"][k])) - cas.horzcat(*V["P"][k]) for k in range(N)]
+            gf = cas.vertcat(gf, g_P)
+            model.i_g_m = list(range(gf.shape[0], gf.shape[0] + n * n * (d + 1) * N))
+            g_M = [Mf(V["X"][k], cas.horzcat(*V["Z"][k]), V["U"][k], w0, T, cas.horzcat(*V["P"][k]), cas.horzcat(*V["M"][k])) for k in range(N)]
+            gf = cas.vertcat(gf, g_M)
+        model.i_g_periodic = list(range(gf.shape[0], gf.shape[0] + n))
+        g_periodic = V["X"][0] - V["X"][-1]
+        gf = cas.vertcat(gf, g_periodic)
+        model.i_g_periodic_p = None
         if with_cov:
-            g.periodic_P = V.P[0] - V.P[-1]
-        g.fix = V.X[0][states.i_x]
+            model.i_g_periodic_p = list(range(gf.shape[0], gf.shape[0] + n * n))
+            g_periodic_P = cas.horzcat(*V["P"][0]) - cas.horzcat(*V["P"][-1])
+            gf = cas.vertcat(gf, g_periodic_P)
+        model.i_g_fix = list(range(gf.shape[0], gf.shape[0] + n))
+        g_fix = V["X"][0][0]
+        gf = cas.vertcat(gf, g_fix)
+        model.i_g_hyper = None
         if with_gamma:
-            g.hyper = [hr.call([V.X[k], V.PP[...], V.P[k]])[0] for k in range(N)]
+            model.i_g_hyper = list(range(gf.shape[0], gf.shape[0] + q * N))
+            g_hyper = [hr(V["X"][k], cas.horzcat(*V["P"][k])) for k in range(N)]
+            gf = cas.vercat(gf, g_hyper)
         else:
-            g.hyper = [h.call([V.X[k]])[0] for k in range(N)]
-        g.freeze()
+            model.i_g_hyper = list(range(gf.shape[0], gf.shape[0] + q * N))
+            g_hyper = [h(V["X"][k]) for k in range(N)]
+            gf = cas.vertcat(gf, *g_hyper)
+        # gf = cas.Function("all_g", [V["X"]], [g])
 
-        gf = MXFunction([V[...]], [g[...]])
-        gf.init()
-
-        ff = MXFunction([V[...]], [V.PP.T + regularisation * sumAll(vertcat(V.U) ** 2) / 2 / N])
-        ff.init()
+        ff = V["T"] + regularisation * cas.sum1(cas.vertcat(*V["U"]) ** 2) / 2 / N
 
         # ===========================================
         # ===========================================
@@ -214,7 +243,7 @@ class Collocation(Formulation):
         class NLPSolutionInspector:
             def __init__(self):
                 self.iter = 0
-                self.log = numpy.zeros((4, 1000))
+                self.log = np.zeros((4, 1000))
                 self.colors = list("bgrcmyk" * 5)
 
                 if plot_clear:
@@ -225,17 +254,17 @@ class Collocation(Formulation):
                 figure(1)
 
                 subplot(111)
-                theta = linspace(0, 2 * pi, 1000)
+                theta = np.linspace(0, 2 * np.pi, 1000)
                 for h in hyper:
                     fill(
-                        h["a"] * abs(cos(theta)) ** (2.0 / h["n"]) * sign(cos(theta)) + h["x0"],
-                        h["b"] * abs(sin(theta)) ** (2.0 / h["n"]) * sign(sin(theta)) + h["y0"],
+                        h["a"] * np.abs(np.cos(theta)) ** (2.0 / h["n"]) * sign(np.cos(theta)) + h["x0"],
+                        h["b"] * np.abs(np.sin(theta)) ** (2.0 / h["n"]) * sign(np.sin(theta)) + h["y0"],
                         "r",
                     )
                 title("X(t)")
 
                 # A sampled circle, used to draw uncertainty ellipsoid
-                self.circle = array([[sin(x), cos(x)] for x in linspace(0, 2 * pi, 100)]).T
+                self.circle = array([[np.sin(x), np.cos(x)] for x in np.linspace(0, 2 * np.pi, 100)]).T
 
             def __call__(self, f, *args):
                 sol = f.input(NLP_X_OPT)
@@ -340,7 +369,7 @@ class Collocation(Formulation):
                 subplot(111).relim()
                 subplot(111).autoscale_view()
                 if log_results is not None:
-                    gcf().savefig("results/%s_x_%03d.eps" % (log_results, self.iter), format="eps")
+                    gcf().savefig("results/s_x_%03d.eps" % (log_results, self.iter), format="eps")
                 figure(2)
                 subplot(111).relim()
                 subplot(111).autoscale_view()
@@ -356,151 +385,181 @@ class Collocation(Formulation):
 
                 self.iter += 1
 
-        iterationInspector = NLPSolutionInspector()
+        # iterationInspector = NLPSolutionInspector()
+        # #! We wrap the logging instance in a PyFunction
+        # c = PyFunction(
+        #     iterationInspector,
+        #     nlpsolverOut(
+        #         x_opt=sp_dense(V.shape),
+        #         cost=sp_dense(1, 1),
+        #         lambda_x=sp_dense(V.shape),
+        #         lambda_g=sp_dense(g.shape),
+        #         g=sp_dense(g.shape),
+        #     ),
+        #     [sp_dense(1, 1)],
+        # )
+        # c.init()
 
-        #! We wrap the logging instance in a PyFunction
-        c = PyFunction(
-            iterationInspector,
-            nlpsolverOut(
-                x_opt=sp_dense(V.shape),
-                cost=sp_dense(1, 1),
-                lambda_x=sp_dense(V.shape),
-                lambda_g=sp_dense(g.shape),
-                g=sp_dense(g.shape),
-            ),
-            [sp_dense(1, 1)],
-        )
-        c.init()
+        nlp = {"x": V["V"], "f": ff, "g": gf}
+        options = {"ipopt.tol": 1e-10,
+                   "ipopt.linear_solver": "ma57",
+                   "ipopt.mu_init": 1e-11,
+                   "ipopt.warm_start_bound_push": 1e-11,
+                   "ipopt.warm_start_bound_frac": 1e-11,
+                   "ipopt.warm_start_init_point": "yes",
+                   }
+        solver = cas.nlpsol("solver", "ipopt", nlp, options)
+        # solver.setOption("expand_f", True)
+        # solver.setOption("expand_g", True)
+        # solver.setOption("generate_hessian", True)
+        # if with_plotting:
+        #     solver.setOption("iteration_callback", c)
 
-        QPSolvers = {
-            "OOQP": (OOQPSolver, {}),
-            "IPOPT": (NLPQPSolver, {"nlp_solver": IpoptSolver, "nlp_solver_options": {}}),
-            "CPLEX": (CplexSolver, {}),
+        # print("Init solver start")
+        # solver.init()
+        # print("Init solver end")
+
+        # figure(3)
+        # matshow(DMatrix(solver.getH().output().sparsity(), 1))
+        # show()
+
+        bounds_init = {
+            "lbx": np.ones(V["V"].shape) * -np.inf,
+            "ubx": np.ones(V["V"].shape) * np.inf,
+            "lbg": np.zeros(gf.shape),
+            "ubg": np.zeros(gf.shape),
+            "x0": np.zeros(V["V"].shape),
         }
-
-        qp_solver_ = QPSolvers[qp_solver]
-
-        Solvers = {
-            "ipopt": (
-                IpoptSolver,
-                {"tol": 1e-10, "linear_solver": "ma57"},
-                {
-                    "mu_init": 1e-11,
-                    "warm_start_bound_push": 1e-11,
-                    "warm_start_mult_bound_push": 1e-11,
-                    "warm_start_init_point": "yes",
-                },
-            ),
-            "worhp": (WorhpSolver, {"TolOpti": 1e-9, "UserHM": True}, {"InitialLMest": False}),
-            "sqp": (SQPMethod, {"qp_solver": qp_solver_[0], "qp_solver_options": qp_solver_[1]}, {}),
-            "knitro": (KnitroSolver, {}, {}),
-        }
-
-        solver_ = Solvers[nlp_solver]
-        solver = solver_[0](ff, gf)
-        solver.setOption("expand_f", True)
-        solver.setOption("expand_g", True)
-        solver.setOption("generate_hessian", True)
-        if with_plotting:
-            solver.setOption("iteration_callback", c)
-        solver.setOption(solver_[1])
-        if hot_start and (init is not None):
-            solver.setOption(solver_[2])
-        # solver.setOption("mu_strategy","monotone")
-
-        print("Init solver start")
-        solver.init()
-        print("Init solver end")
-
-        figure(3)
-        matshow(DMatrix(solver.getH().output().sparsity(), 1))
-        show()
+        lam_x0 = np.ones(V["V"].shape) * np.nan
+        lam_g0 = np.ones(gf.shape) * np.nan
 
         # Time must be positive
-        solver.input(NLP_LBX)[V.i_PP.T] = 0
-
-        solver.input(NLP_LBG).setAll(0)
-        solver.input(NLP_UBG).setAll(0)
+        bounds_init["lbx"][model.i_t] = 0
 
         if ubound > 0:
-            solver.input(NLP_LBX)[vertcat(V.i_U)] = -ubound
-            solver.input(NLP_UBX)[vertcat(V.i_U)] = ubound
+            bounds_init["lbx"][model.i_u] = -ubound
+            bounds_init["ubx"][model.i_u] = ubound
 
-        solver.input(NLP_UBG)[vertcat(g.i_hyper)] = Inf
-        solver.input(NLP_LBX)[V.i_PP.m] = model.parameters_
-        solver.input(NLP_UBX)[V.i_PP.m] = model.parameters_
-        if with_cov:
-            sww = diag([1] * p)
-            try:
-                makeDense(sww)
-            except:
-                pass
-            solver.input(NLP_LBX)[V.i_PP.Sigma_ww] = sww
-            solver.input(NLP_UBX)[V.i_PP.Sigma_ww] = sww
-        if with_gamma:
-            solver.input(NLP_LBX)[V.i_PP.gamma] = gamma_
-            solver.input(NLP_X_INIT)[V.i_PP.gamma] = gamma_
-            solver.input(NLP_UBX)[V.i_PP.gamma] = gamma_
+        bounds_init["ubg"][model.i_g_hyper] = cas.inf
+        # if with_cov:
+        #     sww = diag([1] * p)
+        #     try:
+        #         makeDense(sww)
+        #     except:
+        #         pass
+        #     solver.input(NLP_LBX)[V.i_PP.Sigma_ww] = sww
+        #     solver.input(NLP_UBX)[V.i_PP.Sigma_ww] = sww
+        # if with_gamma:
+        #     solver.input(NLP_LBX)[V.i_PP.gamma] = gamma_
+        #     solver.input(NLP_X_INIT)[V.i_PP.gamma] = gamma_
+        #     solver.input(NLP_UBX)[V.i_PP.gamma] = gamma_
 
         if init is None:  # Initalize from scratch
             T_ = 4.0
-            solver.input(NLP_X_INIT)[V.i_PP.T] = T_
-            solver.input(NLP_X_INIT)[V.i_PP.m] = model.parameters_
+            bounds_init["x0"][model.i_t] = T_
+            # solver.input(NLP_X_INIT)[V.i_PP.m] = model.parameters_
 
             # Initialize in circle
             for k in range(N):
                 for j in range(d + 1):
                     t = T_ * ((k + 0.0) / N + (rho_root[j] + 0.0) / N)
-                    solver.input(NLP_X_INIT)[V.i_Z[k][states.iv_x, j]] = 3 * sin(2 * pi * t / T_)
-                    solver.input(NLP_X_INIT)[V.i_Z[k][states.iv_y, j]] = 3 * cos(2 * pi * t / T_)
+                    bounds_init["x0"][model.i_z[k][4*j]] = 3 * cas.sin(2 * pi * t / T_)
+                    bounds_init["x0"][model.i_z[k][4*j+1]] = 3 * cas.cos(2 * pi * t / T_)
+                    # solver.input(NLP_X_INIT)[V.i_Z[k][states.iv_x, j]] = 3 * sin(2 * pi * t / T_)
+                    # solver.input(NLP_X_INIT)[V.i_Z[k][states.iv_y, j]] = 3 * cos(2 * pi * t / T_)
 
             for k in range(N + 1):
                 t = T_ * (k + 0.0) / N
-                solver.input(NLP_X_INIT)[V.i_X[k][states.iv_x]] = 3 * sin(2 * pi * t / T_)
-                solver.input(NLP_X_INIT)[V.i_X[k][states.iv_y]] = 3 * cos(2 * pi * t / T_)
+                bounds_init["x0"][model.i_x[2*k]] = 3 * cas.sin(2 * pi * t / T_)
+                bounds_init["x0"][model.i_x[2*k]+1] = 3 * cas.cos(2 * pi * t / T_)
+                # solver.input(NLP_X_INIT)[V.i_X[k][states.iv_x]] = 3 * sin(2 * pi * t / T_)
+                # solver.input(NLP_X_INIT)[V.i_X[k][states.iv_y]] = 3 * cos(2 * pi * t / T_)
 
         else:  # Initialize from another object
             isolver = init.solver
-            solver.input(NLP_X_INIT)[V.i_PP.T] = isolver.output(NLP_X_OPT)[init.V.i_PP.T]
-            solver.output(NLP_LAMBDA_X)[V.i_PP.T] = isolver.output(NLP_LAMBDA_X)[init.V.i_PP.T]
-            solver.input(NLP_X_INIT)[V.i_PP.m] = isolver.output(NLP_X_OPT)[init.V.i_PP.m]
-            solver.output(NLP_LAMBDA_X)[V.i_PP.m] = isolver.output(NLP_LAMBDA_X)[init.V.i_PP.m]
+            bounds_init["x0"][model.i_t] = isolver.output["x"][model.i_t]
+            lam_x0[model.i_t] = isolver.output["lam_x"][model.i_t]
+            # solver.input(NLP_X_INIT)[V.i_PP.m] = isolver.output(NLP_X_OPT)[init.V.i_PP.m]
+            # solver.output(NLP_LAMBDA_X)[V.i_PP.m] = isolver.output(NLP_LAMBDA_X)[init.V.i_PP.m]
 
             for k in range(N + 1):
-                solver.input(NLP_X_INIT)[V.i_X[k]] = isolver.output(NLP_X_OPT)[init.V.i_X[k]]
-                solver.output(NLP_LAMBDA_X)[V.i_X[k]] = isolver.output(NLP_LAMBDA_X)[init.V.i_X[k]]
+                bounds_init["x0"][model.i_x[2*k]] = isolver.output["x"][model.i_x[2*k]]
+                bounds_init["x0"][model.i_x[2*k]+1] = isolver.output["x"][model.i_x[2*k]+1]
+                lam_x0[model.i_x[2*k]] = isolver.output["lam_x"][model.i_x[2*k]]
+                lam_x0[model.i_x[2*k]+1] = isolver.output["lam_x"][model.i_x[2*k]+1]
             for k in range(N):
-                solver.input(NLP_X_INIT)[V.i_U[k]] = isolver.output(NLP_X_OPT)[init.V.i_U[k]]
-                solver.output(NLP_LAMBDA_X)[V.i_U[k]] = isolver.output(NLP_LAMBDA_X)[init.V.i_U[k]]
-                solver.input(NLP_X_INIT)[V.i_Z[k]] = isolver.output(NLP_X_OPT)[init.V.i_Z[k]]
-                solver.output(NLP_LAMBDA_X)[V.i_Z[k]] = isolver.output(NLP_LAMBDA_X)[init.V.i_Z[k]]
+                bounds_init["x0"][model.i_u[2*k]] = isolver.output["x"][model.i_u[2*k]]
+                bounds_init["x0"][model.i_u[2*k+1]] = isolver.output["x"][model.i_u[2*k+1]]
+                lam_x0[model.i_u[2*k]] = isolver.output["lam_x"][model.i_u[2*k]]
+                lam_x0[model.i_u[2*k+1]] = isolver.output["lam_x"][model.i_u[2*k+1]]
+                bounds_init["x0"][model.i_z[k]] = isolver.output["x"][model.i_z[k]]
+                lam_x0[model.i_z[k]] = isolver.output["lam_x"][model.i_z[k]]
 
             if with_cov and init.with_cov:
                 for k in range(N + 1):
-                    solver.input(NLP_X_INIT)[V.i_P[k]] = isolver.output(NLP_X_OPT)[init.V.i_P[k]]
-                    solver.output(NLP_LAMBDA_X)[V.i_P[k]] = isolver.output(NLP_LAMBDA_X)[init.V.i_P[k]]
-                for k in range(N):
-                    solver.input(NLP_X_INIT)[V.i_P[k]] = isolver.output(NLP_X_OPT)[init.V.i_P[k]]
-                    solver.output(NLP_LAMBDA_X)[V.i_P[k]] = isolver.output(NLP_LAMBDA_X)[init.V.i_P[k]]
+                    bounds_init["x0"][model.i_p[k]] = isolver.output["x"][model.i_p[k]]
+                    lam_x0[model.i_p[k]] = isolver.output["lam_x"][model.i_p[k]]
+                # for k in range(N):  # BUG ?
+                #     bounds_init["x0"][model.i_m[k]] = isolver.output["x"][model.i_m[k]]
+                #     bounds_init["lam_x0"][model.i_m[k]] = isolver.output["lam_x"][model.i_m[k]]
+                #     solver.input(NLP_X_INIT)[V.i_P[k]] = isolver.output(NLP_X_OPT)[init.V.i_P[k]]
+                #     solver.output(NLP_LAMBDA_X)[V.i_P[k]] = isolver.output(NLP_LAMBDA_X)[init.V.i_P[k]]
 
-            for k in range(N):
-                solver.input(NLP_LAMBDA_INIT)[g.i_F[k]] = isolver.output(NLP_LAMBDA_G)[init.g.i_F[k]]
-                solver.input(NLP_LAMBDA_INIT)[g.i_G[k]] = isolver.output(NLP_LAMBDA_G)[init.g.i_G[k]]
-                solver.input(NLP_LAMBDA_INIT)[g.i_hyper[k]] = isolver.output(NLP_LAMBDA_G)[init.g.i_hyper[k]]
-            solver.input(NLP_LAMBDA_INIT)[g.i_fix] = isolver.output(NLP_LAMBDA_G)[init.g.i_fix]
-            solver.input(NLP_LAMBDA_INIT)[g.i_periodic] = isolver.output(NLP_LAMBDA_G)[init.g.i_periodic]
+            lam_g0[model.i_g_f] = isolver.output["lam_g"][model.i_g_f]
+            lam_g0[model.i_g_g] = isolver.output["lam_g"][model.i_g_g]
+            lam_g0[model.i_g_hyper] = isolver.output["lam_g"][model.i_g_hyper]
+            lam_g0[model.i_g_periodic] = isolver.output["lam_g"][model.i_g_periodic]
+            lam_g0[model.i_g_fix] = isolver.output["lam_g"][model.i_g_fix]
 
-        solver.solve()
+            # for k in range(N):
+            #     solver.input(NLP_LAMBDA_INIT)[g.i_F[k]] = isolver.output(NLP_LAMBDA_G)[init.g.i_F[k]]
+            #     solver.input(NLP_LAMBDA_INIT)[g.i_G[k]] = isolver.output(NLP_LAMBDA_G)[init.g.i_G[k]]
+            #     solver.input(NLP_LAMBDA_INIT)[g.i_hyper[k]] = isolver.output(NLP_LAMBDA_G)[init.g.i_hyper[k]]
+            # solver.input(NLP_LAMBDA_INIT)[g.i_fix] = isolver.output(NLP_LAMBDA_G)[init.g.i_fix]
+            # solver.input(NLP_LAMBDA_INIT)[g.i_periodic] = isolver.output(NLP_LAMBDA_G)[init.g.i_periodic]
+
+            bounds_init["lam_x0"] = lam_x0
+            bounds_init["lam_g0"] = lam_g0
+
+        # solver.solve()
+        sol = solver.call(bounds_init)
+        x_opt = sol["x"]
 
         if log_results is not None:
-            figure(1).savefig("results/%s_x.eps" % log_results, format="eps")
-            figure(2).savefig("results/%s_u.eps" % log_results, format="eps")
+            def draw_superellipse(ax, hyper, resolution=100):
+                for i in range(2):
+                    a = hyper[i]["a"]
+                    b = hyper[i]["b"]
+                    x0 = hyper[i]["x0"]
+                    y0 = hyper[i]["y0"]
+                    n = hyper[i]["n"]
 
-        if with_plotting and plot_hold:
-            matplotlib.interactive(False)
-            show()
+                    x = np.linspace(-2 * a + x0, 2 * a + x0, resolution)
+                    y = np.linspace(-2 * b + y0, 2 * b + y0, resolution)
 
-        print(solver.output(NLP_LAMBDA_G)[veccat(g.i_hyper)])
+                    X, Y = np.meshgrid(x, y)
+                    Z = ((X - x0) / a) ** n + ((Y - y0) / b) ** n - 1
+
+                    ax.contourf(X, Y, Z, levels=[-1000, 0], colors=["#DA1984"], alpha=0.5)
+                    # ax.contour(X, Y, Z, levels=[0], colors='black')
+
+            # figure(1).savefig("results/%s_x.eps" % log_results, format="eps")
+            # figure(2).savefig("results/%s_u.eps" % log_results, format="eps")
+
+            positions = np.zeros((2, N+1))
+            positions[0, :] = np.reshape(x_opt[model.i_x][::4], (N+1, ))
+            positions[1, :] = np.reshape(x_opt[model.i_x][1::4], (N+1, ))
+            fig, ax = plt.subplots(1, 1)
+            draw_superellipse(ax, hyper)
+            ax.plot(positions[0, :], positions[1, :], '.b')
+            fig.savefig(f"{log_results}.png")
+            fig.show()
+
+        # if with_plotting and plot_hold:
+        #     matplotlib.interactive(False)
+        #     show()
+
+        # print(solver.output(NLP_LAMBDA_G)[veccat(g.i_hyper)])
 
         # Make public
         self.solver = solver
