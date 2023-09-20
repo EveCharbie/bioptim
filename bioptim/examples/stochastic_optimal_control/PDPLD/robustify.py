@@ -3,57 +3,23 @@ import os
 
 hyper = [{"a": 1, "b": 1, "x0": 0, "y0": 0, "n": 2}]
 
-nlp_solver="worhp",
+# nlp_solver = "worhp"
 initial = Collocation(ubound=10, with_cov=False, plot_hold=False, hyper=hyper, plot_clear=True, log_results="nominal")
 
-cov_propagation = Collocation(
-    nlp_solver="worhp", with_cov=True, plot_hold=False, init=initial, hyper=hyper, plot_clear=True
-)
+cov_propagation = Collocation(ubound=10, with_cov=True, plot_hold=False, last_sol_for_init=initial, hyper=hyper, plot_clear=True, log_results="cov_propagation")
 
 robustify = Collocation(
-    nlp_solver="worhp",
+    ubound=10,
     with_cov=True,
     plot_hold=False,
-    init=cov_propagation,
+    last_sol_for_init=cov_propagation,
     with_gamma=True,
     gamma=1,
     hyper=hyper,
     plot_clear=True,
     plot_initial=True,
-)
-raw_input()
-os.system("reset")
-
-#
-initial = Collocation(
-    nlp_solver="worhp", with_cov=False, plot_hold=False, hyper=hyper, log_results="nominal", plot_clear=True
-)
-
-cov_propagation = Collocation(
-    nlp_solver="worhp",
-    with_cov=True,
-    plot_hold=False,
-    init=initial,
-    hyper=hyper,
-    log_results="cov_propagation",
-    plot_clear=True,
-)
-
-robustify = Collocation(
-    nlp_solver="worhp",
-    with_cov=True,
-    plot_hold=False,
-    init=cov_propagation,
-    with_gamma=True,
-    gamma=1,
-    hyper=hyper,
     log_results="robustify",
-    plot_clear=True,
-    plot_initial=True,
 )
-
-raw_input()
-os.system("reset")
 
 result = robustify
 param = result.param
