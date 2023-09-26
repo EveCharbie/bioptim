@@ -3,21 +3,14 @@ from formulation import *
 
 def Collocation(with_cov=False,
                 N=40,
-                # nlp_solver="ipopt",
-                # qp_solver="IPOPT",
                 with_plotting=True,
-                plot_hold=True,
                 last_sol_for_init=None,
-                # hot_start=False,
                 with_gamma=False,
-                gamma=0,
-                hyper=[{"a": 1, "b": 1, "x0": 0, "y0": 0, "n": 2}],
                 regularisation=1e-2,
                 ubound=0,
-                log_results=None,
-                plot_clear=False,
-                plot_initial=False):
-    gamma_ = gamma
+                log_results=None
+                ):
+
     if with_plotting:
         matplotlib.interactive(True)
     model = Model()
@@ -39,7 +32,7 @@ def Collocation(with_cov=False,
 
     n = len(model.states.keys())-1
     m = len(model.controls.keys())-1
-    p = len(model.dist.keys())-1
+    # p = len(model.dist.keys())-1
     q = len(hyper)
 
     x, u, w = model.states["states"], model.controls["controls"], model.dist["dist"]
@@ -567,6 +560,23 @@ def Collocation(with_cov=False,
                 ax.contourf(X, Y, Z, levels=[-1000, 0], colors=["#DA1984"], alpha=0.5)
                 # ax.contour(X, Y, Z, levels=[0], colors='black')
 
+        def draw_P_ellipse(cov, pos, ax):
+            def eigsorted(cov):
+                vals, vecs = np.linalg.eigh(cov)
+                order = vals.argsort()[::-1]
+                return vals[order], vecs[:, order]
+
+            vals, vecs = eigsorted(cov)
+            theta = np.degrees(np.arctan2(*vecs[:, 0][::-1]))
+
+            # Width and height are "full" widths, not radius
+            width, height = 2 * np.sqrt(vals)
+            ellip = plt.matplotlib.patches.Ellipse(xy=pos, width=width, height=height, angle=theta, color="b",
+                                                   alpha=0.1)
+
+            ax.add_patch(ellip)
+            return ellip
+
         # figure(1).savefig("results/%s_x.eps" % log_results, format="eps")
         # figure(2).savefig("results/%s_u.eps" % log_results, format="eps")
 
@@ -576,6 +586,12 @@ def Collocation(with_cov=False,
         fig, ax = plt.subplots(1, 1)
         draw_superellipse(ax, hyper)
         ax.plot(positions[0, :], positions[1, :], '.b')
+        if with_cov:
+            for i in range(N):
+                P = np.zeros((4, 4))
+                for j in range(4):
+                    P[:, j] = np.reshape(x_opt[model.i_p[i]][4*j:4*(j+1)], (4, ))
+                    draw_P_ellipse(P[:2, :2], positions[:, i], ax)
         fig.savefig(f"{log_results}.png")
         fig.show()
 

@@ -210,6 +210,7 @@ def prepare_ocp(
     epsilon = 0
     constraints.add(path_constraint, node=Node.ALL, super_elipse_index=0, min_bound=0+epsilon, max_bound=cas.inf, quadratic=False)
     constraints.add(path_constraint, node=Node.ALL, super_elipse_index=1, min_bound=0+epsilon, max_bound=cas.inf, quadratic=False)
+    constraints.add(ConstraintFcn.SEMIDEFINITE_POSITIVE_MATRIX, node=Node.START)
 
     # Dynamics
     dynamics = DynamicsList()

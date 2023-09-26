@@ -1,23 +1,16 @@
 from collocation import *
 import os
 
-hyper = [{"a": 1, "b": 1, "x0": 0, "y0": 0, "n": 2}]
-
 # nlp_solver = "worhp"
-initial = Collocation(ubound=10, with_cov=False, plot_hold=False, hyper=hyper, plot_clear=True, log_results="nominal")
+initial = Collocation(ubound=10, with_cov=False, log_results="nominal")
 
-cov_propagation = Collocation(ubound=10, with_cov=True, plot_hold=False, last_sol_for_init=initial, hyper=hyper, plot_clear=True, log_results="cov_propagation")
+cov_propagation = Collocation(ubound=10, with_cov=True, last_sol_for_init=initial, log_results="cov_propagation")
 
 robustify = Collocation(
     ubound=10,
     with_cov=True,
-    plot_hold=False,
     last_sol_for_init=cov_propagation,
     with_gamma=True,
-    gamma=1,
-    hyper=hyper,
-    plot_clear=True,
-    plot_initial=True,
     log_results="robustify",
 )
 
