@@ -116,6 +116,7 @@ def Collocation(with_cov=False,
     hx = h(x)
 
     if with_gamma:
+        gamma = 1
         # The robustified superellipsoid constraints
         superellipsoid_constraint = cas.SX()
         for i in range(q):
@@ -400,14 +401,21 @@ def Collocation(with_cov=False,
     # c.init()
 
     nlp = {"x": V["V"], "f": ff, "g": gf}
-    options = {"ipopt.tol": 1e-10,
-               "ipopt.linear_solver": "ma57",
-               "ipopt.mu_init": 1e-11,
-               "ipopt.warm_start_bound_push": 1e-11,
-               "ipopt.warm_start_bound_frac": 1e-11,
-               "ipopt.warm_start_init_point": "yes",
+    options = {"worhp.TolOpti": 1e-9,
+               "worhp.UserHM": True,
+               "worhp.InitialLMest": False,
                }
-    solver = cas.nlpsol("solver", "ipopt", nlp, options)
+    solver = cas.nlpsol("solver", "worhp", nlp, options)
+
+    # options = {"ipopt.tol": 1e-10,
+    #            "ipopt.linear_solver": "ma57",
+    #            "ipopt.mu_init": 1e-11,
+    #            "ipopt.warm_start_bound_push": 1e-11,
+    #            "ipopt.warm_start_bound_frac": 1e-11,
+    #            "ipopt.warm_start_init_point": "yes",
+    #            }
+    # solver = cas.nlpsol("solver", "ipopt", nlp, options)
+
     # solver.setOption("expand_f", True)
     # solver.setOption("expand_g", True)
     # solver.setOption("generate_hessian", True)
