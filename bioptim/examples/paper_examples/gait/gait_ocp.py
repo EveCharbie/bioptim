@@ -104,10 +104,10 @@ def prepare_ocp(
     qdot_ref: list[np.ndarray],
     activation_ref: list[np.ndarray],
     ode_solver: OdeSolverBase = OdeSolver.RK4(),
-    use_sx: bool = True,
+    use_sx: bool = False,
     n_threads: int = 1,
     phase_dynamics: PhaseDynamics = PhaseDynamics.SHARED_DURING_THE_PHASE,
-    expand_dynamics: bool = True,
+    expand_dynamics: bool = False,
     control_type: ControlType = ControlType.CONSTANT,
 ) -> OptimalControlProgram:
     """
@@ -205,7 +205,8 @@ def prepare_ocp(
     dynamics = DynamicsList()
     for p in range(nb_phases - 1):
         dynamics.add(DynamicsFcn.MUSCLE_DRIVEN, phase=p, with_contact=True, with_residual_torque=True, expand_dynamics=expand_dynamics)
-    dynamics.add(DynamicsFcn.MUSCLE_DRIVEN, phase=3, with_residual_torque=True, expand_dynamics=expand_dynamics)
+    dynamics.add(DynamicsFcn.MUSCLE_DRIVEN, phase=3, with_residual_torque=True,
+                 expand_dynamics=expand_dynamics, phase_dynamics=phase_dynamics)
 
     # Constraints
     m_heel, m_m1, m_m5, m_toes = 26, 27, 28, 29
@@ -361,7 +362,7 @@ def main():
         emg_ref,
         n_threads=4,
         ode_solver=OdeSolver.RK4(),
-        use_sx=True,
+        use_sx=False,
         control_type=ControlType.CONSTANT,
     )
 
