@@ -35,6 +35,7 @@ from bioptim import (
     PhaseTransitionList,
     PhaseTransitionFcn,
     BiMappingList,
+    Axis,
 )
 
 from jumper_utils import find_initial_root_pose
@@ -144,6 +145,7 @@ def prepare_ocp(
     constraints = ConstraintList()
     # Torque constrained to torqueMax
     for p in range(nb_phases):
+        # bug here size preoblem between tau(11) and mapped tau(4)
         constraints.add(ConstraintFcn.TORQUE_MAX_FROM_Q_AND_QDOT, phase=p, node=control_nodes, min_torque=tau_min)
 
     # Positivity of CoM_dot on z axis prior the take-off (to make sure it jumps upward)
@@ -186,7 +188,7 @@ def prepare_ocp(
             min_bound=-0.0001,
             max_bound=np.inf,
             marker_index=heel_marker_idx,
-            target=0,
+            axes=Axis.Z,
         )
 
         # Non-slipping constraints
@@ -202,22 +204,20 @@ def prepare_ocp(
     constraints.add(
         ConstraintFcn.TRACK_MARKERS,
         phase=2,
-        index=2,
         node=Node.END,
         min_bound=-0.001,
         max_bound=0.001,
         marker_index=toe_marker_idx,
-        target=0,
+        axes=Axis.Z,
     )
     constraints.add(
             ConstraintFcn.TRACK_MARKERS,
             phase=3,
-            index=2,
             node=Node.END,
             min_bound=-0.001,
             max_bound=0.001,
             marker_index=heel_marker_idx,
-            target=0,
+            axes=Axis.Z,
         )
 
     # Target the final pose (except for translation)

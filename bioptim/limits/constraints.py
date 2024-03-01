@@ -326,7 +326,7 @@ class ConstraintFunction(PenaltyFunctionAbstract):
                 controller.states["q"],
                 controller.states["qdot"],
             )
-            if min_torque:
+            if min_torque:  # is this elementwise?
                 min_bound = if_else(lt(min_bound, min_torque), min_torque, min_bound)
                 max_bound = if_else(lt(max_bound, min_torque), min_torque, max_bound)
 
