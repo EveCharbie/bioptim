@@ -3,6 +3,51 @@ from casadi import vertcat, DM, SX, MX
 
 from ..misc.enums import ControlType, InterpolationType
 
+class OptimizationNodeVariable:
+    """
+    A class to handle the variables at a specific node
+
+    Attributes
+    ----------
+    cx: MX | SX
+        The casadi variable
+    index: int
+        The index of the variable in the global vector
+    shape: int
+        The shape of the variable
+    node_index: int
+        The index of the node
+    """
+
+    def __init__(self, cx: MX | SX, mx: MX, cx_scaled: MX | SX, mx_scaled: MX):
+        """
+        Parameters
+        ----------
+        cx: MX | SX
+            The casadi variable
+        mx: MX
+            The mx casadi variable
+        """
+        self.cx = cx
+        self.mx = mx
+        self.cx_scaled = cx_scaled
+        self.mx_scaled = mx_scaled
+
+    @property
+    def scaled
+
+    # def __getitem__(self, item):
+    #     return self.cx[item]
+    #
+    # def __setitem__(self, key, value):
+    #     self.cx[key] = value
+    #
+    # def __len__(self):
+    #     return len(self.cx)
+    #
+    # def __repr__(self):
+    #     return f"OptimizationNodeVariable of shape {self.shape} at index {self.index}"
+
 
 class OptimizationVectorHelper:
     """
@@ -34,7 +79,7 @@ class OptimizationVectorHelper:
         Declare all the casadi variables with the right size to be used during a specific phase
         """
         # states
-        x = []
+        x = OptimizationVariable
         x_scaled = []
         # controls
         u = []
@@ -65,11 +110,11 @@ class OptimizationVectorHelper:
                         nlp.cx.sym(f"X_scaled_{nlp.phase_idx}_{k}", nlp.states.scaled.shape, n_col)
                     )
 
-                    x[nlp.phase_idx].append(
-                        x_scaled[nlp.phase_idx][k]
+                    cx = (x_scaled[nlp.phase_idx][k]
                         * np.repeat(
                             np.concatenate([nlp.x_scaling[key].scaling for key in nlp.states.keys()]), n_col, axis=1
-                        )
+                        ))
+                    x[nlp.phase_idx].append(OptimizationNodeVariable(cx)
                     )
                 else:
                     x_scaled[nlp.phase_idx] = x_scaled[nlp.use_states_from_phase_idx]

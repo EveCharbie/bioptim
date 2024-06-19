@@ -5,6 +5,7 @@ from casadi import vertcat, Function, DM, horzcat
 
 from .configure_new_variable import NewVariableConfiguration
 from .dynamics_functions import DynamicsFunctions
+from .dynamics_controller import DynamicsController
 from .fatigue.fatigue_dynamics import FatigueList
 from .ode_solver import OdeSolver
 from ..gui.plot import CustomPlot
@@ -22,6 +23,7 @@ from ..misc.mapping import BiMapping, Mapping
 from ..misc.options import UniquePerPhaseOptionList, OptionGeneric
 from ..models.protocols.stochastic_biomodel import StochasticBioModel
 from ..optimization.problem_type import SocpType
+from ..optimization.optimization_vector import OptimizationVectorHelper
 
 
 class ConfigureProblem:
@@ -961,6 +963,25 @@ class ConfigureProblem:
         """
 
         DynamicsFunctions.apply_parameters(nlp)
+
+        OptimizationVectorHelper.declare_ocp_shooting_points(ocp)
+
+        phase_dynamics = nlp.phase_dynamics
+
+        controller = DynamicsController(
+            ocp,
+            nlp,
+            nlp.time_mx,
+            nlp.states.mx,
+            nlp.controls.mx,
+            nlp.states.scaled.mx,
+            nlp.control.scaled.mx,
+            nlp.parameters.mx,
+            nlp.algebraic_states.mx,
+            nlp.algebraic_states.scaled.mx,
+            nlp.numerical_timeseries.mx,
+            0,  # Charbie: node_index,
+            extra_params)
 
         dynamics_eval = dyn_func(
             nlp.time_mx,

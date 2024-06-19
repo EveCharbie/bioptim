@@ -30,17 +30,12 @@ from bioptim import (
     Solver,
     DynamicsEvaluation,
     PhaseDynamics,
+    DynamicsController,
 )
 
 
 def custom_dynamics(
-    time: MX | SX,
-    states: MX | SX,
-    controls: MX | SX,
-    parameters: MX | SX,
-    algebraic_states: MX | SX,
-    numerical_timeseries: MX | SX,
-    nlp: NonLinearProgram,
+    controller: DynamicsController,
     my_additional_factor=1,
 ) -> DynamicsEvaluation:
     """
@@ -48,18 +43,8 @@ def custom_dynamics(
 
     Parameters
     ----------
-    time: MX | SX
-        The time of the system
-    states: MX | SX
-        The state of the system
-    controls: MX | SX
-        The controls of the system
-    parameters: MX | SX
-        The parameters acting on the system
-    algebraic_states: MX | SX
-        The algebraic states of the system
-    nlp: NonLinearProgram
-        A reference to the phase
+    controller: DynamicsController
+        The controller of the dynamics. It contains the time, states, controls, parameters, algebraic_states, numerical_timeseries, ...
     my_additional_factor: int
         An example of an extra parameter sent by the user
 

@@ -244,7 +244,8 @@ class NonLinearProgram:
         """
         if node_idx >= self.ns:
             return 1
-        return self.dynamics[node_idx].shape_xf[1] + (1 if self.ode_solver.duplicate_starting_point else 0)
+        return self.ode_solver.n_required_cx
+        # return self.ode_solver.n_integration_steps + (1 if self.ode_solver.duplicate_starting_point else 0)
 
     def n_states_stepwise_steps(self, node_idx) -> int:
         """

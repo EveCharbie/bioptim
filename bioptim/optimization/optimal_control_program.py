@@ -622,7 +622,6 @@ class OptimalControlProgram:
         )
 
     def _prepare_dynamics(self):
-        # Prepare the dynamics
         for i in range(self.n_phases):
             self.nlp[i].initialize(self.cx)
             self.nlp[i].parameters = self.parameters  # This should be remove when phase parameters will be implemented
@@ -644,7 +643,7 @@ class OptimalControlProgram:
         self.update_bounds(x_bounds, u_bounds, parameter_bounds, a_bounds)
         self.update_initial_guess(x_init, u_init, parameter_init, a_init)
         # Define the actual NLP problem
-        OptimizationVectorHelper.declare_ocp_shooting_points(self)
+        # OptimizationVectorHelper.declare_ocp_shooting_points(self) ####remove
 
     def _declare_multi_node_penalties(
         self,
